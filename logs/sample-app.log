@@ -1,0 +1,4 @@
+2026-08-14T02:00:00Z sample-app INFO Service started
+2026-08-14T02:00:05Z sample-app INFO Health check ok
+2026-08-14T02:00:09Z sample-app WARNING Slow response 1800ms
+2026-08-14T02:00:12Z sample-app ERROR Payment gateway timeout after 30s

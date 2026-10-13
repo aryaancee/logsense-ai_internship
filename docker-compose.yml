@@ -1,0 +1,9 @@
+services:
+  logsense:
+    build: .
+    ports: ["8000:8000"]
+    env_file: .env
+    volumes: ["logsense-data:/data"]
+    restart: unless-stopped
+volumes:
+  logsense-data: {}
