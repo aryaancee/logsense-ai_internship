@@ -1,14 +1,9 @@
-# One-click deploy on Render: New > Blueprint > pick this repo. A persistent disk needs a paid plan (check Render's current plans).
 services:
   - type: web
     name: logsense-ai
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /healthz
-    disk:
-      name: logsense-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: LOGSENSE_SECRET
         generateValue: true
