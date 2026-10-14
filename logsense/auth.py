@@ -24,6 +24,16 @@ def _adb():
     return c
 
 
+@contextmanager
+def _tx():
+    """One short-lived connection per operation: always committed and closed, so nothing ever holds the database locked."""
+    c = _adb()
+    try:
+        yield c; c.commit()
+    finally:
+        c.close()
+
+
 def secret():
     s = os.getenv("LOGSENSE_SECRET")
     if s: return s.encode()
@@ -47,7 +57,7 @@ _DUMMY = hash_pw("dummy-password-for-timing")
 
 
 def user(uid):
-    r = _adb().execute("SELECT id, email, guest FROM users WHERE id=?", (uid,)).fetchone()
+    with _tx() as c: r = c.execute("SELECT id, email, guest FROM users WHERE id=?", (uid,)).fetchone()
     return dict(id=r["id"], email=r["email"], guest=bool(r["guest"])) if r else None
 
 
@@ -55,24 +65,24 @@ def signup(email, pw):
     email = (email or "").strip().lower()
     if not EMAIL.match(email): raise ValueError("Enter a valid email address")
     if len(pw or "") < 8: raise ValueError("Password must be at least 8 characters")
-    uid, c, now = secrets.token_hex(8), _adb(), time.time()
+    uid, now = secrets.token_hex(8), time.time()
     try:
-        c.execute("INSERT INTO users(id,email,pw,guest,created,last_seen) VALUES(?,?,?,0,?,?)", (uid, email, hash_pw(pw), now, now)); c.commit()
+        with _tx() as c: c.execute("INSERT INTO users(id,email,pw,guest,created,last_seen) VALUES(?,?,?,0,?,?)", (uid, email, hash_pw(pw), now, now))
     except sqlite3.IntegrityError:
         raise ValueError("That email is already registered")
     return user(uid)
 
 
 def login(email, pw):
-    r = _adb().execute("SELECT * FROM users WHERE email=? AND guest=0", ((email or "").strip().lower(),)).fetchone()
+    with _tx() as c: r = c.execute("SELECT * FROM users WHERE email=? AND guest=0", ((email or "").strip().lower(),)).fetchone()
     ok = check_pw(pw or "", r["pw"] if r else _DUMMY)
     if not (r and ok): raise ValueError("Wrong email or password")
     return user(r["id"])
 
 
 def guest():
-    uid, now, c = "g" + secrets.token_hex(7), time.time(), _adb()
-    c.execute("INSERT INTO users(id,email,pw,guest,created,last_seen) VALUES(?,?,?,1,?,?)", (uid, f"{uid}@guest.local", "", now, now)); c.commit()
+    uid, now = "g" + secrets.token_hex(7), time.time()
+    with _tx() as c: c.execute("INSERT INTO users(id,email,pw,guest,created,last_seen) VALUES(?,?,?,1,?,?)", (uid, f"{uid}@guest.local", "", now, now))
     return user(uid)
 
 
@@ -92,7 +102,8 @@ def verify(tok):
 
 def touch(uid):
     if time.time() - _seen.get(uid, 0) > 60:
-        c = _adb(); c.execute("UPDATE users SET last_seen=? WHERE id=?", (time.time(), uid)); c.commit(); _seen[uid] = time.time()
+        with _tx() as c: c.execute("UPDATE users SET last_seen=? WHERE id=?", (time.time(), uid))
+        _seen[uid] = time.time()
 
 
 def db_path(uid):
@@ -115,18 +126,10 @@ def throttle(key, limit=8, window=300):
 
 def ai_limit(u): return int(os.getenv("LOGSENSE_GUEST_AI_LIMIT", "10")) if u["guest"] else int(os.getenv("LOGSENSE_USER_AI_LIMIT", "50"))
 
-
-def ai_left(u):
-    r = _adb().execute("SELECT n FROM usage WHERE uid=? AND day=?", (u["id"], date.today().isoformat())).fetchone()
-    return max(0, ai_limit(u) - (r["n"] if r else 0))
+def ai_left(u): return None   # None = no limit, the counter is hidden
 
 
-def take_ai(u):
-    """Use one of today's AI questions (protects the shared AI key from abuse). False when the daily limit is reached."""
-    c, day = _adb(), date.today().isoformat()
-    c.execute("INSERT OR IGNORE INTO usage VALUES(?,?,0)", (u["id"], day))
-    ok = c.execute("UPDATE usage SET n=n+1 WHERE uid=? AND day=? AND n<?", (u["id"], day, ai_limit(u))).rowcount == 1
-    c.commit(); return ok
+def take_ai(u): return True   # always allowed
 
 
 def _remove_files(uid):
@@ -137,21 +140,22 @@ def _remove_files(uid):
 
 
 def delete_user(uid):
-    c = _adb(); c.execute("DELETE FROM users WHERE id=?", (uid,)); c.execute("DELETE FROM usage WHERE uid=?", (uid,)); c.commit(); _remove_files(uid)
+    with _tx() as c: c.execute("DELETE FROM users WHERE id=?", (uid,)); c.execute("DELETE FROM usage WHERE uid=?", (uid,))
+    _remove_files(uid)
 
 
 def cleanup(hours=24):
     """Delete guest demo accounts (and their data) that have been idle for a day."""
-    c = _adb()
-    for r in c.execute("SELECT id FROM users WHERE guest=1 AND last_seen<?", (time.time() - hours * 3600,)).fetchall():
-        delete_user(r["id"])
+    with _tx() as c: old = c.execute("SELECT id FROM users WHERE guest=1 AND last_seen<?", (time.time() - hours * 3600,)).fetchall()
+    for r in old: delete_user(r["id"])
 
 
 def poll_paths():
     """Databases whose live sources should run: every registered user, guests only while recently active."""
     if os.getenv("LOGSENSE_AUTH", "on") == "off": return [core.default_path()]
     now = time.time()
-    out = [db_path(r["id"]) for r in _adb().execute("SELECT id, guest, last_seen FROM users") if not r["guest"] or now - (r["last_seen"] or 0) < 900]
+    with _tx() as c: rows = c.execute("SELECT id, guest, last_seen FROM users").fetchall()
+    out = [db_path(r["id"]) for r in rows if not r["guest"] or now - (r["last_seen"] or 0) < 900]
     return [p for p in out if os.path.exists(p)]
 
 

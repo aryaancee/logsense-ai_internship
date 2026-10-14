@@ -75,7 +75,32 @@ def test_level_counts_exact_and_demo_repeatable():
     demo(); demo()
     n = len(core.search(level="WARNING", exact=True, limit=100000))
     assert n > 0 and core.stats()["total"] < 2000
-    assert core.ask("how many warning logs are there")["answer"].startswith(f"I found {n} matching log lines")
+    assert core.ask("how many warning logs are there")["answer"].startswith(f"There are {n} warning-level")
+
+
+def test_common_questions_are_answered_exactly_without_ai():
+    demo()
+    n = core.db().execute("SELECT COUNT(*) FROM logs WHERE level='WARNING'").fetchone()[0]
+    for q in ("how many warning level are there", "how many number of warning logs are there", "how many warnings?"):
+        r = core.ask(q); assert r["mode"] == "direct" and f"There are {n} warning-level" in r["answer"]
+    last = core.db().execute("SELECT id, ts FROM logs WHERE level='WARNING' ORDER BY ts DESC, id DESC LIMIT 1").fetchone()
+    assert f"log {last['id']}:" in core.ask("latest warning level log number")["answer"]
+    top = core.db().execute("SELECT service FROM logs WHERE level IN ('ERROR','CRITICAL') GROUP BY service ORDER BY COUNT(*) DESC LIMIT 1").fetchone()[0]
+    assert f"most is {top}" in core.ask("which service has the most errors?")["answer"]
+    assert core.direct("why did checkout fail?") is None  # open questions go to the AI
+
+
+def test_ai_blank_or_invented_numbers_are_rejected_and_retried(monkeypatch):
+    demo()
+    n = core.db().execute("SELECT COUNT(*) FROM logs WHERE level='ERROR'").fetchone()[0]
+    fake_ai(monkeypatch, PLAN, "There are  logs of that kind.", f"There are {n} logs of that kind.")
+    r = core.ask("describe warnings sorted nicely"); assert r["mode"] == "llm-sql" and "  " not in r["answer"] and str(n) in r["answer"]
+    fake_ai(monkeypatch, PLAN, "Exactly 987654 of them.", "Still 987654 of them.")
+    r = core.ask("describe warnings sorted nicely"); assert "987654" not in r["answer"]  # falls back to the exact data
+
+
+def test_plain_keeps_a_number_the_model_wrapped_in_a_tag():
+    assert core.plain("There are <results>238</results> warning-level logs.") == "There are 238 warning-level logs."
 
 
 def test_lookup_by_id():
@@ -103,7 +128,7 @@ def test_ai_answer_is_plain_and_uses_history(monkeypatch):
 def test_any_real_log_number_ok_but_invented_one_rejected(monkeypatch):
     demo()
     fake_ai(monkeypatch, '{"queries":[{"purpose":"x","sql":"SELECT * FROM logs WHERE id=1059"}],"keywords":[]}', "Log 1059 is a normal login failure.")
-    assert core.ask("give 1059 id log")["mode"] == "llm-sql"
+    assert core.ask("why was log 1059 a failure?")["mode"] == "llm-sql"
     fake_ai(monkeypatch, PLAN, "Log 999999 caused everything.")
     r = core.ask("why?"); assert r["mode"] == "extractive" and r["llm_error"]
 
@@ -111,7 +136,7 @@ def test_any_real_log_number_ok_but_invented_one_rejected(monkeypatch):
 def test_model_echoing_data_is_cleaned(monkeypatch):
     demo()
     fake_ai(monkeypatch, PLAN, "<results>[{'n': 1}]</results>\n<logs>x</logs>")
-    r = core.ask("count warnings")
+    r = core.ask("tell me about warnings sorted nicely")
     assert r["mode"] == "llm-sql" and "<" not in r["answer"] and "count warnings:" in r["answer"]
 
 
@@ -120,7 +145,7 @@ def test_broken_sql_is_repaired_once(monkeypatch):
     bad = '{"queries":[{"purpose":"count","sql":"SELECT COUNT(*) FROM logs WHERE severity=\'WARNING\'"}],"keywords":[]}'
     good = '{"queries":[{"purpose":"count","sql":"SELECT COUNT(*) AS n FROM logs WHERE level=\'WARNING\'"}]}'
     fake_ai(monkeypatch, bad, good, "There are some warnings.")
-    r = core.ask("how many warnings")
+    r = core.ask("what do the warnings look like?")
     assert r["mode"] == "llm-sql" and r["queries"][-1]["rows"] == 1 and not r["queries"][-1]["error"]
 
 
@@ -128,7 +153,7 @@ def test_ai_failure_falls_back_and_says_why(monkeypatch):
     demo()
     monkeypatch.setattr(core._llm, "enabled", lambda: True); monkeypatch.setattr(core, "llm", lambda *a, **k: None)
     monkeypatch.setattr(llm, "last_error", "RuntimeError: HTTP 429: quota")
-    r = core.ask("how many warning logs")
+    r = core.ask("what do warning logs look like?")
     assert r["mode"] == "extractive" and "429" in r["llm_error"]
 
 
@@ -200,7 +225,7 @@ def test_cloudwatch_pull_with_fake_client():
 def test_basic_answer_names_the_truly_first_error():
     demo()
     first = core.search(level="ERROR", limit=1, asc=True)[0]
-    assert f"log {first['id']} at" in core.ask("what was the first error")["answer"]
+    assert f"log {first['id']}:" in core.ask("what was the first error")["answer"]
 
 
 from datetime import datetime
@@ -337,7 +362,7 @@ def test_guest_demo_account(hosted):
 def test_idle_guest_accounts_are_cleaned_up(hosted):
     g = auth.guest()
     with auth.using(g["id"]): core.ingest(["2026-08-14T02:00:00Z s INFO x"], "s")
-    c = auth._adb(); c.execute("UPDATE users SET last_seen=? WHERE id=?", (time.time() - 99999, g["id"])); c.commit()
+    with auth._tx() as c: c.execute("UPDATE users SET last_seen=? WHERE id=?", (time.time() - 99999, g["id"]))
     auth.cleanup()
     assert auth.user(g["id"]) is None and not os.path.exists(auth.db_path(g["id"]))
 

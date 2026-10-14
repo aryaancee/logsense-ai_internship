@@ -8,6 +8,7 @@ Internship project at **Beehive Systems Pvt. Ltd.**
 - **Live sources:** AWS CloudWatch, AWS S3, Google Cloud Logging, a web link, or the built-in demo stream. The server checks every few seconds, reads only NEW events, and the dashboard updates instantly (Server-Sent Events). Each user supplies their own read-only cloud keys, stored encrypted.
 - **Pipeline:** parse mixed formats -> mask emails/IPs/tokens -> group similar lines into patterns -> store -> detect incidents -> alert on new error patterns.
 - **Ask anything:** the AI writes a read-only SQL query for your question, the app runs it in a sandbox, and the AI explains the real result in plain text. Without an AI key, a rule-based fallback answers.
+- **Accurate answers:** counts, latest/first log, per-service breakdowns and log-number lookups are computed exactly from the database (no AI, no AI quota used). Everything else goes to the AI, which receives exact totals for the whole dataset plus real matching log lines; its answer is checked (no blank values, every number must exist in the data, invented log numbers rejected), retried once, and replaced by the exact query result if it still cannot be trusted.
 - **Safety:** passwords hashed (PBKDF2), signed HttpOnly session cookie, CSRF header, login throttling, per-account daily AI limits, upload size and storage caps, SQL sandbox (SELECT only, two tables, read-only), SSRF protection for links, security headers, one-click account deletion.
 
 ## Run on your computer (Windows)

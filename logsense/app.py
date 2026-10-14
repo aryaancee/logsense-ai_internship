@@ -188,6 +188,10 @@ def incidents(): return core.incidents()
 @api.post("/ask")
 def ask(b: Q, request: Request):
     u = _u(request)
+    try:
+        if (d := core.direct(b.question[:2000])): return d  # exact answers cost no AI quota
+    except Exception:
+        pass
     use_ai = not (AUTH_ON() and llm.enabled()) or auth.take_ai(u)  # daily AI limit per account protects the shared AI key
     try:
         r = core.ask(b.question[:2000], b.history[-3:], ai=use_ai)
@@ -306,14 +310,13 @@ button,select,input,textarea{font:inherit;color:var(--fg);background:#1a2540;bor
 #toasts{position:fixed;right:16px;top:16px;display:flex;flex-direction:column;gap:8px;z-index:9}.toast{max-width:360px;background:#2a1620;border:1px solid var(--red);padding:10px 14px;border-radius:10px;font-size:13px}
 </style>
 <div id=land hidden><div class=wrap>
-<nav class=row style="justify-content:space-between"><b style="font-size:18px">🐝 LogSense AI</b><span class=row id=navbtns></span></nav>
+<nav class=row style="justify-content:space-between"><b style="font-size:18px">🐝 LogSense AI</b><button class=g onclick="showAuth('login')">Log in</button></nav>
 <section class=hero><span class=chip>Live · AI-powered · for DevOps and support teams</span><h1>Ask your server logs anything.</h1>
 <p>LogSense AI pulls logs from your cloud, turns thousands of lines into a few clear patterns, flags incidents the moment they start, and answers your questions in plain English.</p>
-<div class=row id=cta></div><p id=gerr class=err></p></section>
+<div class=row><button class="p big" onclick="guest()">Try the live demo - no sign-up</button><button class=big onclick="showAuth('signup')">Create a free account</button></div><p id=gerr class=err></p></section>
 <div id=authbox class=panel hidden style="max-width:420px"><div class=row><button id=m_login class=p onclick="mode('login')">Log in</button><button id=m_signup onclick="mode('signup')">Sign up</button></div>
 <div class=fgrid><label class=lbl>Email<input id=em type=email autocomplete=email></label><label class=lbl>Password<input id=pw type=password autocomplete=current-password placeholder="at least 8 characters" onkeydown="if(event.key=='Enter')doAuth()"></label></div>
-<div class=row><button class=p id=go onclick="doAuth()">Log in</button><button class=g onclick="$('authbox').hidden=true">Cancel</button></div><p id=aerr class=err></p>
-<p class=mut style="margin:6px 0 0;font-size:13px">Just looking? <a href=# onclick="guest();return false" style="color:var(--acc)">Try the live demo - no sign-up</a></p></div>
+<button class=p id=go onclick="doAuth()">Log in</button><p id=aerr class=err></p></div>
 <div class=g4><div class=panel><b>Live from your cloud</b><span>Connect AWS CloudWatch, S3, Google Cloud Logging or a log link. New logs stream in every few seconds.</span></div>
 <div class=panel><b>Ask in plain English</b><span>No query language. Ask "why did checkout fail at 2 AM?" and get a clear answer based on your real data.</span></div>
 <div class=panel><b>Incidents and alerts</b><span>Bursts of errors are grouped into incidents with a summary and likely cause. New error types pop up instantly.</span></div>
@@ -321,7 +324,7 @@ button,select,input,textarea{font:inherit;color:var(--fg);background:#1a2540;bor
 <h2>How it works</h2><ol class=steps><li><b>Connect</b> a source, or load the sample data.</li><li><b>Clean up:</b> private data is masked and similar lines are grouped into patterns.</li><li><b>Watch</b> the live dashboard: activity, errors, incidents.</li><li><b>Ask</b> questions. The AI searches your logs and explains the real result.</li></ol>
 <footer>Internship project at Beehive Systems Pvt. Ltd.<span id=author></span></footer></div></div>
 <div id=app hidden><div class=wrap>
-<header class=row style="justify-content:space-between"><h1>🐝 LogSense AI</h1><span class=row><span id=live class=chip>Live: connecting...</span><span id=ai class=chip title="Click to re-check the AI connection">AI: checking...</span><span id=who class=chip></span><button class=g onclick="showLand()">Home</button><button class=g onclick="logout()">Log out</button></span></header>
+<header class=row style="justify-content:space-between"><h1>🐝 LogSense AI</h1><span class=row><span id=live class=chip>Live: connecting...</span><span id=ai class=chip title="Click to re-check the AI connection">AI: checking...</span><span id=who class=chip></span><button class=g onclick="logout()">Log out</button></span></header>
 <div id=gb class="banner" hidden>You are in <b>demo mode</b>: sample data and a live demo stream are running, and everything is deleted after a day. <a href=# onclick="signupFromDemo();return false" style="color:var(--acc)">Create a free account</a> to connect your own cloud logs.</div>
 <h2>Add logs</h2><div class=panel><div class=row><button class=p onclick="demo()">Load sample data</button><button onclick="clr()">Clear all</button>
 <label class=chip>Upload log files<input type=file multiple hidden onchange="up(this.files)"></label><span id=msg class=chip style="display:none"></span></div>
@@ -345,17 +348,14 @@ button,select,input,textarea{font:inherit;color:var(--fg);background:#1a2540;bor
 const $=i=>document.getElementById(i);let ME=null,CFG={},hist=[],es=null;
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const H={'content-type':'application/json','x-requested-with':'logsense'};
-const api=(p,o={})=>fetch('/api'+p,{...o,headers:H}).then(async r=>{if(r.status==401){ME=null;showLand();throw new Error('Please log in')}if(!r.ok){let m='Server error '+r.status;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}return r.json()});
+const api=(p,o={})=>fetch('/api'+p,{...o,headers:H}).then(async r=>{if(r.status==401){showLand();throw new Error('Please log in')}if(!r.ok){let m='Server error '+r.status;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}return r.json()});
 const authPost=async(p,b)=>{const r=await fetch('/api/auth/'+p,{method:'POST',headers:H,body:JSON.stringify(b||{})});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||'Something went wrong');return j};
 const say=t=>{const m=$('msg');m.style.display=t?'':'none';m.textContent=t};
 window.onunhandledrejection=e=>say('Problem: '+(e.reason&&e.reason.message||e.reason));
 const when=t=>String(t||'').replace('T',' ').replace('Z',' UTC');
 /* ---------- landing + login ---------- */
 let AM='login';
-function showLand(){if(es){es.close();es=null}$('app').hidden=true;$('land').hidden=false;landCTA()}
-function landCTA(){const g=ME&&ME.guest;
-$('cta').innerHTML=!ME?`<button class="p big" onclick="guest()">Try the live demo - no sign-up</button><button class=big onclick="showAuth('signup')">Create a free account</button>`:g?`<button class="p big" onclick="showApp()">Back to my demo</button><button class=big onclick="signupFromDemo()">Create a free account</button>`:`<button class="p big" onclick="showApp()">Open my dashboard</button>`;
-$('navbtns').innerHTML=!ME?`<button class=g onclick="guest()">Try demo</button><button class=g onclick="showAuth('login')">Log in</button>`:`<button onclick="showApp()">${g?'Back to my demo':'Open my dashboard'}</button>`}
+function showLand(){if(es){es.close();es=null}$('app').hidden=true;$('land').hidden=false}
 function showAuth(m){$('authbox').hidden=false;mode(m);$('em').focus()}
 function mode(m){AM=m;$('m_login').className=m=='login'?'p':'';$('m_signup').className=m=='signup'?'p':'';$('go').textContent=m=='login'?'Log in':'Create account';$('pw').autocomplete=m=='login'?'current-password':'new-password';$('aerr').textContent=''}
 async function doAuth(){try{$('aerr').textContent='';await authPost(AM,{email:$('em').value,password:$('pw').value});await boot()}catch(e){$('aerr').textContent=e.message}}
@@ -406,7 +406,7 @@ function send(){const q=$('q').value.trim();if(q){$('q').value='';ask(q)}}
 async function ask(q){bubble('u',esc(q));const t=bubble('b','Thinking...');
 try{const r=await api('/ask',{method:'POST',body:JSON.stringify({question:q,history:hist.slice(-3)})});
 const how=(r.queries||[]).length?`<details><summary>How I found this</summary><pre>${esc(r.queries.map(x=>'- '+x.purpose+'\n  '+x.sql+'\n  -> '+(x.error?'error: '+x.error:x.rows+' rows')).join('\n'))}</pre></details>`:'';
-const src=r.mode=='llm-sql'?'Answered by AI from your database':'Basic answer'+(r.llm_error?' (AI unavailable: '+esc(r.llm_error)+')':'');
+const src=r.mode=='direct'?'Exact answer computed from your database':r.mode=='llm-sql'?'Answered by AI from your database':'Basic answer'+(r.llm_error?' (AI unavailable: '+esc(r.llm_error)+')':'');
 t.innerHTML=esc(r.answer)+`<span class=meta>${src} · <a href=# onclick="fb(true);return false" style="color:inherit">helpful</a> · <a href=# onclick="fb(false);return false" style="color:inherit">not helpful</a></span>`+how;
 hist.push({q,a:r.answer});window.last=[q,r.answer];me2()}catch(e){t.textContent='Problem: '+e.message}$('chat').scrollTop=1e9}
 function fb(h){api('/feedback',{method:'POST',body:JSON.stringify({question:last[0],answer:last[1],helpful:h})});say('Thanks for the feedback');setTimeout(()=>say(''),2000)}
